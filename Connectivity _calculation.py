@@ -8,7 +8,7 @@ import scipy.io as sio
 import os 
 from mne.connectivity import spectral_connectivity
 import numpy as np 
-from nilearn.plotting import plot_matrix
+from nilearn.plotting import plot_matrix, view_connectome, show
 
 
 #-----For Statistical Analysis
@@ -19,129 +19,219 @@ import scipy.stats as stats
 #import matplotlib.pyplot as plt
 
 
-#------------------------------------------------------------------------------
-# Load the Data, Labels and define variables for Odor trials analysis
-#------------------------------------------------------------------------------
-srate = 1000
-ntime   = 30*srate
-
-path = r'C:\Users\lanan\Documents\Sleep Project\Sleep_Time_Frequency_Analysis\PythonConnectivity\ChannelOdor'
-
-labels = sio.loadmat(os.path.join(path, 'labels.mat'))
-labels = labels['labels'].tolist()[0]
-labels = [label[0] for label in labels]
-nscouts = len(labels)
-
-
-subj = 0
-connMatrixTotalOdorOn = np.zeros((nscouts,nscouts,21));
-connMatrixTotalOdorOff = np.zeros((nscouts,nscouts,21));
-connMatrixTotalOdorDiff = np.zeros((nscouts,nscouts,21));
-
-for filename in os.listdir(path):
-    if filename.endswith(".mat") and filename.startswith("S"):
-        print(filename)
-    
-        data = sio.loadmat(os.path.join(path,filename))
-        data = data['data']
-
-        #----------------------------------------------------------------------
-        # Connectivity Analysis
-        #----------------------------------------------------------------------
-        data = data.reshape([nscouts, -1, ntime])
-        #plt.plot(data[1][:][3])
-        data = data.transpose([1,0,2])
-        
-        connMatrixOn = spectral_connectivity(data, method='coh', sfreq=srate, mode='multitaper', 
-                                           fmin=1, fmax=4, faverage=1, tmin=15, tmax=29)
-        connMatrixOn = np.squeeze(connMatrixOn[0])
-        
-        connMatrixOff = spectral_connectivity(data, method='coh', sfreq=srate, mode='multitaper', 
-                                           fmin=1, fmax=4, faverage=1, tmin=0, tmax=15)
-        connMatrixOff = np.squeeze(connMatrixOff[0])
-
-
-        for i in range(nscouts):
-            for j in range(nscouts):
-                connMatrixOn[i,j] = connMatrixOn[j,i]
-                connMatrixOff[i,j] = connMatrixOff[j,i]
-                
-        connMatrixTotalOdorOn[:,:,subj] = connMatrixOn
-        connMatrixTotalOdorOff[:,:,subj] = connMatrixOff
-        ConnMatrixDiffOdor = connMatrixOn - connMatrixOff
-        
-        #---- Plot Connectivity Matrices for each subject------
-        #plot_matrix(connMatrixOn,title = (filename+'Odor On'),labels=labels, colorbar=True, tri='full', reorder=False, vmax=.8, vmin=0)
-        #plot_matrix(connMatrixOff,title = (filename+'Odor Off'),labels=labels, colorbar=True, tri='full', reorder=False, vmax=.8, vmin=0)
-        #plot_matrix(ConnMatrixDiffOdor,title = (filename+'Odor'),labels=labels,colorbar=True, tri='full', reorder=False, vmax=.05, vmin=0)
-        
-        connMatrixTotalOdorDiff[:,:,subj] = ConnMatrixDiffOdor
-        subj += 1
 
 #------------------------------------------------------------------------------
-# Load the Data, Labels and define variables for Placebo trials analysis
+# CONFIG
 #------------------------------------------------------------------------------
+channelOdorPath = r'data\ChannelOdor'
+channelPlaceboPath = r'data\ChannelPlacebo'
+calculationsSavingPath = r'data\calculated'
+channelLocationsPath = r'data\channlocsMNI2.txt'
+save_calculations = True
+load_calculations = True
+edge_threshold = "95%" #thresshold to draw an edge in connectome viz
 
 
-srate = 1000
-ntime   = 30*srate
+#------------------------------------------------------------------------------
+# Functions
+#------------------------------------------------------------------------------
+def read_channLoc(channelLocationsPath):
+    coords = np.zeros((128,3))
+    with open(channelLocationsPath, "r") as fp:
+        line = fp.readline()
+        index = 0
+    while index<128:
+       name, _, x, y, z = line.strip().split()
+    #    x = float(x)
+    #    y = float(y)
+    #    z = float(z)
+       coords[index] = np.array([x,y,z])
+       line = fp.readline()
+       index += 1
+    return coords
 
-path = r'C:\Users\lanan\Documents\Sleep Project\Sleep_Time_Frequency_Analysis\PythonConnectivity\ChannelPlacebo'
+def read_channLocMNI(channelLocationsPath):
+    coords = np.zeros((128,3))
+    with open(channelLocationsPath, "r") as fp:
+        line = fp.readline()
+        index = 0
+        while index<128:
+            name, x, y, z = line.strip().split()
+            # x, z, y, name = line.strip().split()
+            # z, x, y, name = line.strip().split()
+            # y, x, z, name = line.strip().split()
+            # z, y, x, name = line.strip().split()
+            # y, z, x, name = line.strip().split()
+            coords[index] = np.array([x,y,z])
+            line = fp.readline()
+            index += 1
+    return coords
 
-labels = sio.loadmat(os.path.join(path, 'labels.mat'))
-labels = labels['labels'].tolist()[0]
-labels = [label[0] for label in labels]
-nscouts = len(labels)
+#------------------------------------------------------------------------------
+# Try to load pre-calculated Odor matrixes
+#------------------------------------------------------------------------------
+if load_calculations and os.path.isfile(os.path.join(calculationsSavingPath,"connMatrixTotalOdorOn.npy")):
+    connMatrixTotalOdorOn = np.load(os.path.join(calculationsSavingPath,"connMatrixTotalOdorOn.npy"))
+    connMatrixTotalOdorOff = np.load(os.path.join(calculationsSavingPath,"connMatrixTotalOdorOff.npy"))
+    connMatrixTotalOdorDiff = np.load(os.path.join(calculationsSavingPath,"connMatrixTotalOdorDiff.npy"))
+    labels = np.load(os.path.join(calculationsSavingPath,"OdorLabels.npy"))
+    nscouts = len(labels)
+    print(f"Calculated Odor matrixes loaded from {calculationsSavingPath}!")
+else:
+    #------------------------------------------------------------------------------
+    # Load the Data, Labels and define variables for Odor trials analysis
+    #------------------------------------------------------------------------------
+    print(f"Calculating Odor Matrixes")
+    srate = 1000
+    ntime   = 30*srate
+
+    path = channelOdorPath
+
+    labels = sio.loadmat(os.path.join(path, 'labels.mat'))
+    labels = labels['labels'].tolist()[0]
+    labels = [label[0] for label in labels]
+    nscouts = len(labels)
 
 
-subj = 0
-connMatrixTotalPlaceboOn = np.zeros((nscouts,nscouts,21));
-connMatrixTotalPlaceboOff = np.zeros((nscouts,nscouts,21));
-connMatrixTotalPlaceboDiff = np.zeros((nscouts,nscouts,21));
+    subj = 0
+    connMatrixTotalOdorOn = np.zeros((nscouts,nscouts,21))
+    connMatrixTotalOdorOff = np.zeros((nscouts,nscouts,21))
+    connMatrixTotalOdorDiff = np.zeros((nscouts,nscouts,21))
 
-for filename in os.listdir(path):
-    if filename.endswith(".mat") and filename.startswith("S"):
-        print(filename)
-    
-        data = sio.loadmat(os.path.join(path,filename))
-        data = data['data']
-
-        #----------------------------------------------------------------------
-        # Connectivity Analysis
-        #----------------------------------------------------------------------
-        data = data.reshape([nscouts, -1, ntime])
-        #plt.plot(data[1][:][3])
-        data = data.transpose([1,0,2])
+    for filename in os.listdir(path):
+        if filename.endswith(".mat") and filename.startswith("S"):
+            print(filename)
         
-        connMatrixOn = spectral_connectivity(data, method='coh', sfreq=srate, mode='multitaper', 
-                                           fmin=1, fmax=4, faverage=1, tmin=15, tmax=29)
-        connMatrixOn = np.squeeze(connMatrixOn[0])
-        
-        connMatrixOff = spectral_connectivity(data, method='coh', sfreq=srate, mode='multitaper', 
-                                           fmin=1, fmax=4, faverage=1, tmin=0, tmax=15)
-        connMatrixOff = np.squeeze(connMatrixOff[0])
+            data = sio.loadmat(os.path.join(path,filename))
+            data = data['data']
+
+            #----------------------------------------------------------------------
+            # Connectivity Analysis
+            #----------------------------------------------------------------------
+            data = data.reshape([nscouts, -1, ntime])
+            #plt.plot(data[1][:][3])
+            data = data.transpose([1,0,2])
+            
+            connMatrixOn = spectral_connectivity(data, method='coh', sfreq=srate, mode='multitaper', 
+                                            fmin=1, fmax=4, faverage=1, tmin=15, tmax=29)
+            connMatrixOn = np.squeeze(connMatrixOn[0])
+            
+            connMatrixOff = spectral_connectivity(data, method='coh', sfreq=srate, mode='multitaper', 
+                                            fmin=1, fmax=4, faverage=1, tmin=0, tmax=15)
+            connMatrixOff = np.squeeze(connMatrixOff[0])
 
 
-        for i in range(nscouts):
-            for j in range(nscouts):
-                connMatrixOn[i,j] = connMatrixOn[j,i]
-                connMatrixOff[i,j] = connMatrixOff[j,i]
-                
-        connMatrixTotalPlaceboOn[:,:,subj] = connMatrixOn
-        connMatrixTotalPlaceboOff[:,:,subj] = connMatrixOff
-        ConnMatrixDiffPlacebo = connMatrixOn - connMatrixOff
+            for i in range(nscouts):
+                for j in range(nscouts):
+                    connMatrixOn[i,j] = connMatrixOn[j,i]
+                    connMatrixOff[i,j] = connMatrixOff[j,i]
+                    
+            connMatrixTotalOdorOn[:,:,subj] = connMatrixOn
+            connMatrixTotalOdorOff[:,:,subj] = connMatrixOff
+            ConnMatrixDiffOdor = connMatrixOn - connMatrixOff
+            
+            #---- Plot Connectivity Matrices for each subject------
+            #plot_matrix(connMatrixOn,title = (filename+'Odor On'),labels=labels, colorbar=True, tri='full', reorder=False, vmax=.8, vmin=0)
+            #plot_matrix(connMatrixOff,title = (filename+'Odor Off'),labels=labels, colorbar=True, tri='full', reorder=False, vmax=.8, vmin=0)
+            #plot_matrix(ConnMatrixDiffOdor,title = (filename+'Odor'),labels=labels,colorbar=True, tri='full', reorder=False, vmax=.05, vmin=0)
+            
+            connMatrixTotalOdorDiff[:,:,subj] = ConnMatrixDiffOdor
+            subj += 1
+
+    #---- Save the total matrixes in files ------
+    if save_calculations:
+        np.save(os.path.join(calculationsSavingPath,"connMatrixTotalOdorOn.npy"), connMatrixTotalOdorOn)
+        np.save(os.path.join(calculationsSavingPath,"connMatrixTotalOdorOff.npy"), connMatrixTotalOdorOff)
+        np.save(os.path.join(calculationsSavingPath,"connMatrixTotalOdorDiff.npy"), connMatrixTotalOdorDiff)
+        np.save(os.path.join(calculationsSavingPath,"OdorLabels.npy"), labels)
+        print(f"Calculated Odor matrixes saved in {calculationsSavingPath}!")
+
+
+#------------------------------------------------------------------------------
+# Try to load pre-calculated Placebo matrixes
+#------------------------------------------------------------------------------
+if load_calculations and os.path.isfile(os.path.join(calculationsSavingPath,"connMatrixTotalPlaceboOn.npy")):
+    connMatrixTotalPlaceboOn = np.load(os.path.join(calculationsSavingPath,"connMatrixTotalPlaceboOn.npy"))
+    connMatrixTotalPlaceboOff = np.load(os.path.join(calculationsSavingPath,"connMatrixTotalPlaceboOff.npy"))
+    connMatrixTotalPlaceboDiff = np.load(os.path.join(calculationsSavingPath,"connMatrixTotalPlaceboDiff.npy"))
+    labels = np.load(os.path.join(calculationsSavingPath,"PlaceboLabels.npy"))
+    nscouts = len(labels)
+    print(f"Calculated Placebo matrixes loaded from {calculationsSavingPath}!")
+else:
+    #------------------------------------------------------------------------------
+    # Load the Data, Labels and define variables for Placebo trials analysis
+    #------------------------------------------------------------------------------
+    print(f"Calculating Placebo Matrixes")
+
+    srate = 1000
+    ntime   = 30*srate
+
+    path = channelPlaceboPath
+
+    labels = sio.loadmat(os.path.join(path, 'labels.mat'))
+    labels = labels['labels'].tolist()[0]
+    labels = [label[0] for label in labels]
+    nscouts = len(labels)
+
+
+    subj = 0
+    connMatrixTotalPlaceboOn = np.zeros((nscouts,nscouts,21));
+    connMatrixTotalPlaceboOff = np.zeros((nscouts,nscouts,21));
+    connMatrixTotalPlaceboDiff = np.zeros((nscouts,nscouts,21));
+
+    for filename in os.listdir(path):
+        if filename.endswith(".mat") and filename.startswith("S"):
+            print(filename)
         
-        #---- Plot Connectivity Matrices for each subject------
-        #plot_matrix(connMatrixOn,title = (filename +'Placebo On'),labels=labels, colorbar=True, tri='full', reorder=False, vmax=.8, vmin=0)
-        #plot_matrix(connMatrixOff,title = (filename +'Placebo Off'),labels=labels,  colorbar=True, tri='full', reorder=False, vmax=.8, vmin=0)
-        #plot_matrix(ConnMatrixDiffOdor,title = (filename +'Placebo'),labels=labels, colorbar=True, tri='full', reorder=False, vmax=.05, vmin=0)
-        
-        connMatrixTotalPlaceboDiff[:,:,subj] = ConnMatrixDiffPlacebo
-        subj += 1
-        
+            data = sio.loadmat(os.path.join(path,filename))
+            data = data['data']
+
+            #----------------------------------------------------------------------
+            # Connectivity Analysis
+            #----------------------------------------------------------------------
+            data = data.reshape([nscouts, -1, ntime])
+            #plt.plot(data[1][:][3])
+            data = data.transpose([1,0,2])
+            
+            connMatrixOn = spectral_connectivity(data, method='coh', sfreq=srate, mode='multitaper', 
+                                            fmin=1, fmax=4, faverage=1, tmin=15, tmax=29)
+            connMatrixOn = np.squeeze(connMatrixOn[0])
+            
+            connMatrixOff = spectral_connectivity(data, method='coh', sfreq=srate, mode='multitaper', 
+                                            fmin=1, fmax=4, faverage=1, tmin=0, tmax=15)
+            connMatrixOff = np.squeeze(connMatrixOff[0])
+
+
+            for i in range(nscouts):
+                for j in range(nscouts):
+                    connMatrixOn[i,j] = connMatrixOn[j,i]
+                    connMatrixOff[i,j] = connMatrixOff[j,i]
+                    
+            connMatrixTotalPlaceboOn[:,:,subj] = connMatrixOn
+            connMatrixTotalPlaceboOff[:,:,subj] = connMatrixOff
+            ConnMatrixDiffPlacebo = connMatrixOn - connMatrixOff
+            
+            #---- Plot Connectivity Matrices for each subject------
+            #plot_matrix(connMatrixOn,title = (filename +'Placebo On'),labels=labels, colorbar=True, tri='full', reorder=False, vmax=.8, vmin=0)
+            #plot_matrix(connMatrixOff,title = (filename +'Placebo Off'),labels=labels,  colorbar=True, tri='full', reorder=False, vmax=.8, vmin=0)
+            #plot_matrix(ConnMatrixDiffOdor,title = (filename +'Placebo'),labels=labels, colorbar=True, tri='full', reorder=False, vmax=.05, vmin=0)
+            
+            connMatrixTotalPlaceboDiff[:,:,subj] = ConnMatrixDiffPlacebo
+            subj += 1
+
+    #---- Save the total matrixes in files ------
+    if save_calculations:
+        np.save(os.path.join(calculationsSavingPath,"connMatrixTotalPlaceboOn.npy"), connMatrixTotalPlaceboOn)
+        np.save(os.path.join(calculationsSavingPath,"connMatrixTotalPlaceboOff.npy"), connMatrixTotalPlaceboOff)
+        np.save(os.path.join(calculationsSavingPath,"connMatrixTotalPlaceboDiff.npy"), connMatrixTotalPlaceboDiff)
+        np.save(os.path.join(calculationsSavingPath,"PlaceboLabels.npy"), labels)
+        print(f"Calculated Placebo matrixes saved in {calculationsSavingPath}!")
+
+
 #------------------------------------------------------------------------------
 # Mean across subjects and Figures creation
 #------------------------------------------------------------------------------
+print("Calculating means")
 connMatrixMeanOdorOn = connMatrixTotalOdorOn.mean(2)
 connMatrixMeanOdorOff = connMatrixTotalOdorOff.mean(2)
 connMatrixMeanOdorDiff = connMatrixTotalOdorDiff.mean(2)
@@ -163,7 +253,7 @@ plot_matrix(connMatrixMeanPlaceboDiff,title = 'mean subjects Placebo Diff',label
 #------------------------------------------------------------------------------
 #                       Statistical analysis
 #------------------------------------------------------------------------------
-
+print("Doing Statistical analysis")
 statistics =  np.zeros((nscouts,nscouts))
 pvalues = np.ones((nscouts,nscouts))
 statisticsOdorVsOff =  np.zeros((nscouts,nscouts))
@@ -183,7 +273,6 @@ for chan1 in range(nscouts):
         pvaluesOdorVsOff[chan2,chan1]  = pvaluesOdorVsOff[chan1,chan2]
         
         
-
 plot_matrix(pvaluesDiff,labels=labels, colorbar=True, tri='full', reorder=False)
 plot_matrix(pvaluesOdorVsOff,labels=labels, colorbar=True, tri='full', reorder=False)
 
@@ -197,3 +286,20 @@ plot_matrix(significantconnectDiff,labels=labels, colorbar=True, tri='full', reo
 
 significantconnectOdorVsOff = 1*(pvaluesOdorVsOff<= 0.05)
 plot_matrix(significantconnectOdorVsOff,title='Significant Connect',labels=labels, colorbar=True, tri='full', reorder=False)
+
+#---- Show plotted matrixes ------
+show()
+
+#------------------------------------------------------------------------------
+# Read channel locations
+#------------------------------------------------------------------------------
+# coords = read_channLoc(channelLocationsPath)
+coords = read_channLocMNI(channelLocationsPath)
+
+#------------------------------------------------------------------------------
+# Show visualization in browser
+#------------------------------------------------------------------------------
+view = view_connectome(significantconnectDiff, coords, edge_threshold='95%')
+#view = view_connectome(significantconnectOdorVsOff, coords, edge_threshold='90%') 
+view.open_in_browser() 
+x = input("Done...press to exit")
